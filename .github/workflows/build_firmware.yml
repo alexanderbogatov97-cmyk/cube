@@ -21,11 +21,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install --upgrade platformio
 
-      - name: Prepare src directory if .ino is in root
+      - name: Prepare src directory
         run: |
           mkdir -p src
           if [ -f smalltv_kamianets_firmware.ino ]; then
             cp smalltv_kamianets_firmware.ino src/main.cpp
+          elif [ -f main.cpp ]; then
+            cp main.cpp src/main.cpp
           fi
 
       - name: Build firmware.bin for GeekMagic SmallTV ESP8266
