@@ -18,7 +18,7 @@
 const char* DEFAULT_WIFI_SSID     = "2,4/5G";
 const char* DEFAULT_WIFI_PASS     = "Sasha1997";
 
-const char* DEFAULT_WORKER_URL    = "";
+const char* DEFAULT_WORKER_URL    = "https://cube.alexanderbogatov97.workers.dev/";
 const char* DEFAULT_ALERTS_TOKEN  = "";
 
 // Координати м. Кам'янець-Подільський (вул. Розвадовського, 5)
@@ -30,7 +30,7 @@ const int   UID_KAMIANETS_RAION   = 135; // Кам'янець-Подільськ
 const int   UID_KHMELNYTSKYI_OBL  = 3;   // Хмельницька область
 
 const char* DEFAULT_QUEUE_TODAY   = "06:00-09:00; 16:00-19:00";
-const char* DEFAULT_QUEUE_TOMORROW= "Очікується від Хмельницькобленерго";
+const char* DEFAULT_QUEUE_TOMORROW= "Очікується";
 
 #ifndef TFT_BL_PIN
 #define TFT_BL_PIN 5
@@ -38,17 +38,17 @@ const char* DEFAULT_QUEUE_TOMORROW= "Очікується від Хмельни�
 
 // Кольори з урахуванням BGR-порядку матриці ST7789 у GeekMagic SmallTV
 #define COL_BG_DARK       0x1861  // Темно-синій фон
-#define COL_HEADER_SAFE   0x9302  // Насичений синій (коли все спокійно)
-#define COL_HEADER_WARN   0x035A  // Помаранчевий (тривога в області / БПЛА поруч)
+#define COL_HEADER_SAFE   0x9302  // Насичений синій (спокійно)
+#define COL_HEADER_WARN   0x035A  // Помаранчевий (тривога в області / БПЛА < 35 км)
 #define COL_HEADER_ALERT  0x409C  // Яскраво-червоний (ТРИВОГА в районі)
 #define COL_CARD_BG       0x28E2  // Фон карток
-#define COL_OUTAGE_BG     0x38E3  // Фон нижньої панелі світла
+#define COL_OUTAGE_BG     0x38E3  // Фон панелі світла
 #define COL_TEXT_WHITE    0xFFFF  // Білий
 #define COL_TEXT_CYAN     0xFFEC  // Блакитний
 #define COL_TEXT_YELLOW   0x07FF  // Жовтий
 #define COL_TEXT_GREEN    0x47E9  // Зелений
 #define COL_TEXT_PINK     0x819F  // Червоно-рожевий (увага / відключення)
-#define COL_TEXT_GRAY     0x9CD3  // Світло-сірий
+#define COL_TEXT_GRAY     0xBDF7  // Світло-сірий
 
 // ============================================================================
 // 2. СТРУКТУРИ ЗБЕРЕЖЕННЯ НАЛАШТУВАНЬ (EEPROM) ТА СТАНУ ДАНИХ
@@ -87,7 +87,7 @@ struct AlertAndPowerData {
   bool alertOblast = false;
   String alertLevel = "none";
   String threatType = "Немає загроз";
-  String threatDirection = "Хмельниччина: тривог немає";
+  String threatDirection = "Кам'янець-Под. р-н: спокійно";
   int nearestShahedKm = -1;
   String nearestShahedPlace = "";
   unsigned long alertStartedEpoch = 0;
@@ -100,13 +100,13 @@ TFT_eSPI tft = TFT_eSPI();
 U8g2_for_TFT_eSPI u8f;
 ESP8266WebServer server(80);
 
-unsigned long lastClockDraw = 0;
+int lastDrawnMinute = -1;
 unsigned long lastWeatherFetch = 0;
 unsigned long lastAlertFetch = 0;
 bool forceRedraw = true;
 
 // ============================================================================
-// 3. ДОПОМІЖНІ ФУНКЦІЇ (UTF-8 ОБРІЗКА, EEPROM, ПІДСВІТКА)
+// 3. ДОПОМІЖНІ ФУНКЦІЇ (UTF-8 ОБРІЗКА ТА ПЕРЕНЕСЕННЯ, EEPROM, ПІДСВІТКА)
 // ============================================================================
 String utf8Truncate(const String& str, size_t maxChars) {
   size_t charCount = 0;
@@ -122,6 +122,53 @@ String utf8Truncate(const String& str, size_t maxChars) {
   }
   if (byteIndex > len) byteIndex = len;
   return str.substring(0, byteIndex);
+}
+
+void printWrappedUtf8(const String& text, int x, int y, int lineHeight, size_t maxCharsPerLine, int maxLines) {
+  size_t startByte = 0;
+  size_t len = text.length();
+  int line = 0;
+
+  while (startByte < len && line < maxLines) {
+    size_t curByte = startByte;
+    size_t charCount = 0;
+    size_t lastSpaceByte = 0;
+    bool hasSpace = false;
+
+    while (curByte < len && charCount < maxCharsPerLine) {
+      uint8_t c = (uint8_t)text[curByte];
+      if (c == ' ') {
+        lastSpaceByte = curByte;
+        hasSpace = true;
+      }
+      size_t step = 1;
+      if ((c & 0x80) == 0) step = 1;
+      else if ((c & 0xE0) == 0xC0) step = 2;
+      else if ((c & 0xF0) == 0xE0) step = 3;
+      else step = 4;
+
+      if (curByte + step > len) break;
+      curByte += step;
+      charCount++;
+    }
+
+    size_t endByte = curByte;
+    size_t nextStart = curByte;
+
+    if (curByte < len && hasSpace && lastSpaceByte > startByte) {
+      endByte = lastSpaceByte;
+      nextStart = lastSpaceByte + 1;
+    }
+
+    u8f.setCursor(x, y + line * lineHeight);
+    u8f.print(text.substring(startByte, endByte));
+
+    while (nextStart < len && text[nextStart] == ' ') {
+      nextStart++;
+    }
+    startByte = nextStart;
+    line++;
+  }
 }
 
 void applyBacklight(uint8_t percent) {
@@ -166,7 +213,7 @@ String weatherCodeToText(int code) {
   switch (code) {
     case 0:  return "Ясно";
     case 1:
-    case 2:  return "Мінлива хмарн.";
+    case 2:  return "Мінл.хмарно";
     case 3:  return "Хмарно";
     case 45:
     case 48: return "Туман";
@@ -174,16 +221,16 @@ String weatherCodeToText(int code) {
     case 53:
     case 55: return "Мряка";
     case 56:
-    case 57: return "Крижана мряка";
+    case 57: return "Криж.мряка";
     case 61:
     case 63: return "Дощ";
-    case 65: return "Сильний дощ";
+    case 65: return "Сильн.дощ";
     case 66:
-    case 67: return "Крижаний дощ";
+    case 67: return "Криж.дощ";
     case 71:
     case 73:
     case 75: return "Сніг";
-    case 77: return "Снігова крупа";
+    case 77: return "Сніж.крупа";
     case 80:
     case 81:
     case 82: return "Злива";
@@ -268,7 +315,7 @@ void fetchWeatherFromOpenMeteo() {
                "&longitude=" + String(KAMIANETS_LON, 4) +
                "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m" +
                "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
-               "&timezone=Europe%2FKyiv&forecast_days=2";
+               "&wind_speed_unit=ms&timezone=Europe%2FKyiv&forecast_days=2";
 
   if (http.begin(*client, url)) {
     int httpCode = http.GET();
@@ -299,7 +346,6 @@ void fetchWeatherFromOpenMeteo() {
 void fetchAlertAndPowerStatus() {
   if (WiFi.status() != WL_CONNECTED) return;
 
-  // Варіант А: Cloudflare Worker
   if (strlen(cfg.worker_url) > 8) {
     std::unique_ptr<BearSSL::WiFiClientSecure> secClient(new BearSSL::WiFiClientSecure);
     secClient->setInsecure();
@@ -329,7 +375,7 @@ void fetchAlertAndPowerStatus() {
           statusData.alertOblast        = doc["alert_oblast"] | false;
           statusData.alertLevel         = doc["alert_level"] | "none";
           statusData.threatType         = doc["threat_type"] | "Немає загроз";
-          statusData.threatDirection    = doc["threat_dir"] | "Хмельниччина: тривог немає";
+          statusData.threatDirection    = doc["threat_dir"] | "Кам'янець-Под. р-н: спокійно";
           statusData.nearestShahedKm    = doc["shahed_km"] | -1;
           statusData.nearestShahedPlace = doc["shahed_place"] | "";
           statusData.alertStartedEpoch  = doc["started_at"] | 0UL;
@@ -354,7 +400,6 @@ void fetchAlertAndPowerStatus() {
     return;
   }
 
-  // Варіант Б: Прямий запит до alerts.in.ua з токеном
   if (strlen(cfg.alerts_token) > 5) {
     std::unique_ptr<BearSSL::WiFiClientSecure> secClient(new BearSSL::WiFiClientSecure);
     secClient->setInsecure();
@@ -380,17 +425,15 @@ void fetchAlertAndPowerStatus() {
           statusData.alertLevel      = "red";
           statusData.threatType      = "ПОВІТРЯНА ТРИВОГА";
           statusData.threatDirection = "Кам'янець-Подільський р-н";
-          if (!wasAlert) {
-            statusData.alertStartedEpoch = time(nullptr);
-          }
+          if (!wasAlert) statusData.alertStartedEpoch = time(nullptr);
         } else if (isYellow) {
           statusData.alertLevel      = "yellow";
           statusData.threatType      = "Попередня загроза";
-          statusData.threatDirection = "Постріли / БПЛА в області";
+          statusData.threatDirection = "Тривога в Хмельницькій обл.";
         } else {
           statusData.alertLevel      = "none";
           statusData.threatType      = "Немає загроз";
-          statusData.threatDirection = "Хмельниччина: тривог немає";
+          statusData.threatDirection = "Кам'янець-Под. р-н: спокійно";
           statusData.alertStartedEpoch = 0;
         }
         statusData.lastUpdate = millis();
@@ -401,7 +444,6 @@ void fetchAlertAndPowerStatus() {
     return;
   }
 
-  // Варіант В: Відкритий API Повітряних тривог Ubilling (без ключів)
   std::unique_ptr<BearSSL::WiFiClientSecure> secClient(new BearSSL::WiFiClientSecure);
   secClient->setInsecure();
   secClient->setBufferSizes(2048, 512);
@@ -444,166 +486,131 @@ void fetchAlertAndPowerStatus() {
 }
 
 // ============================================================================
-// 6. ВІДМАЛЬОВУВАННЯ ЕКРАНА 240x240
+// 6. ВІДМАЛЬОВУВАННЯ ЕКРАНА 240x240 (БЕЗ ШАПКИ, КВАДРАТНИЙ ГОДИННИК У ПОГОДІ)
 // ============================================================================
 void drawScreen() {
   time_t now = time(nullptr);
   struct tm timeinfo;
   localtime_r(&now, &timeinfo);
 
-  char timeHHMM[8];
-  snprintf(timeHHMM, sizeof(timeHHMM), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-
-  uint16_t headerColor = COL_HEADER_SAFE;
-  if (statusData.alertRaion) {
-    headerColor = COL_HEADER_ALERT;
-  } else if (statusData.alertOblast || statusData.nearestShahedKm > 0) {
-    headerColor = COL_HEADER_WARN;
-  }
-
-  // --- 1. ВЕРХНЯ ШАПКА ---
-  tft.fillRect(0, 0, 240, 68, headerColor);
-
+  tft.fillScreen(COL_BG_DARK);
   u8f.setFontMode(1);
-  u8f.setForegroundColor(COL_TEXT_WHITE);
+
+  // --- 1. ВЕРХНІЙ БЛОК: ТРИВОГИ ТА БПЛА (y = 4..76, висота 72px) ---
+  uint16_t alertCardBg = COL_CARD_BG;
+  if (statusData.alertRaion) {
+    alertCardBg = COL_HEADER_ALERT;
+  } else if (statusData.alertOblast || statusData.nearestShahedKm > 0) {
+    alertCardBg = COL_HEADER_WARN;
+  }
+
+  tft.fillRoundRect(4, 4, 232, 72, 6, alertCardBg);
   u8f.setFont(u8g2_font_8x13_t_cyrillic);
 
   if (statusData.alertRaion) {
-    u8f.setCursor(8, 16);
-    u8f.print("ТРИВОГА • Кам'янець");
-    u8f.setCursor(190, 16);
-    u8f.print(timeHHMM);
-
-    unsigned long durSec = 0;
+    unsigned long durMins = 0;
     if (statusData.alertStartedEpoch > 100000 && (unsigned long)now >= statusData.alertStartedEpoch) {
-      durSec = (unsigned long)now - statusData.alertStartedEpoch;
+      durMins = ((unsigned long)now - statusData.alertStartedEpoch) / 60;
     }
-    char durBuf[12];
-    unsigned int mins = durSec / 60;
-    unsigned int secs = durSec % 60;
-    if (mins >= 60) {
-      snprintf(durBuf, sizeof(durBuf), "%02u:%02u:%02u", mins / 60, mins % 60, secs);
-    } else {
-      snprintf(durBuf, sizeof(durBuf), "%02u:%02u", mins, secs);
-    }
-    u8f.setFont(u8g2_font_inr24_mn);
-    u8f.setForegroundColor(COL_TEXT_CYAN);
-    u8f.setCursor(8, 56);
-    u8f.print(durBuf);
-  } else {
-    u8f.setCursor(8, 16);
-    if (statusData.nearestShahedKm > 0) {
-      u8f.print("УВАГА • БПЛА в регіоні");
-    } else {
-      u8f.print("Кам'янець-Подільський");
-    }
-
-    char fullTime[12];
-    snprintf(fullTime, sizeof(fullTime), "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-    u8f.setFont(u8g2_font_inr24_mn);
+    String alertTitle = "ТРИВОГА! (" + String(durMins) + " хв)";
     u8f.setForegroundColor(COL_TEXT_WHITE);
-    u8f.setCursor(8, 56);
-    u8f.print(fullTime);
-  }
+    u8f.setCursor(10, 22);
+    u8f.print(utf8Truncate(alertTitle, 27));
 
-  // --- 2. СЕРЕДНІЙ БЛОК ---
-  tft.fillRect(0, 68, 240, 116, COL_BG_DARK);
-
-  // Картка тривог (без згадки черги світла)
-  tft.fillRoundRect(4, 72, 232, 46, 5, COL_CARD_BG);
-  u8f.setFont(u8g2_font_8x13_t_cyrillic);
-
-  if (statusData.alertRaion || statusData.nearestShahedKm > 0) {
-    u8f.setForegroundColor(COL_TEXT_PINK);
-    u8f.setCursor(10, 88);
-    if (statusData.nearestShahedKm > 0) {
-      String distLine = "Шахед: ~" + String(statusData.nearestShahedKm) + " км";
-      if (statusData.nearestShahedPlace.length() > 0) {
-        distLine += " (" + statusData.nearestShahedPlace + ")";
-      }
-      u8f.print(utf8Truncate(distLine, 27));
-    } else {
-      u8f.print(utf8Truncate(statusData.threatType, 27));
+    printWrappedUtf8(statusData.threatDirection, 10, 42, 19, 27, 2);
+  } else if (statusData.nearestShahedKm > 0) {
+    String distLine = "БПЛА: ~" + String(statusData.nearestShahedKm) + " км";
+    if (statusData.nearestShahedPlace.length() > 0) {
+      distLine += " (" + statusData.nearestShahedPlace + ")";
     }
-
-    u8f.setFont(u8g2_font_6x13_t_cyrillic);
     u8f.setForegroundColor(COL_TEXT_WHITE);
-    u8f.setCursor(10, 108);
-    u8f.print(utf8Truncate(statusData.threatDirection, 35));
+    u8f.setCursor(10, 22);
+    u8f.print(utf8Truncate(distLine, 27));
+
+    printWrappedUtf8(statusData.threatDirection, 10, 42, 19, 27, 2);
   } else if (statusData.alertOblast) {
-    u8f.setForegroundColor(COL_TEXT_YELLOW);
-    u8f.setCursor(10, 88);
-    u8f.print("Область: тривога поруч");
-
-    u8f.setFont(u8g2_font_6x13_t_cyrillic);
     u8f.setForegroundColor(COL_TEXT_WHITE);
-    u8f.setCursor(10, 108);
-    u8f.print(utf8Truncate(statusData.threatDirection, 35));
+    u8f.setCursor(10, 22);
+    u8f.print("Тривога в області");
+
+    printWrappedUtf8(statusData.threatDirection, 10, 42, 19, 27, 2);
   } else {
     u8f.setForegroundColor(COL_TEXT_GREEN);
-    u8f.setCursor(10, 88);
+    u8f.setCursor(10, 22);
     u8f.print("Район: без тривог і БПЛА");
 
-    u8f.setFont(u8g2_font_6x13_t_cyrillic);
     u8f.setForegroundColor(COL_TEXT_GRAY);
-    u8f.setCursor(10, 108);
-    u8f.print(utf8Truncate(statusData.threatDirection, 35));
+    printWrappedUtf8(statusData.threatDirection, 10, 42, 19, 27, 2);
   }
 
-  // Картка погоди
-  tft.fillRoundRect(4, 122, 232, 58, 5, COL_CARD_BG);
-  if (weather.valid) {
-    u8f.setFont(u8g2_font_8x13_t_cyrillic);
-    u8f.setForegroundColor(COL_TEXT_YELLOW);
-    u8f.setCursor(10, 139);
-    char wNowBuf[48];
-    snprintf(wNowBuf, sizeof(wNowBuf), "Зараз: %+.0f°C (відч. %+.0f°)", weather.tempNow, weather.feelsLike);
-    u8f.print(utf8Truncate(String(wNowBuf), 27));
+  // --- 2. СЕРЕДНІЙ БЛОК: ПОГОДА + КВАДРАТНИЙ ГОДИННИК СПРАВА (y = 80..154, висота 74px) ---
+  tft.fillRoundRect(4, 80, 232, 74, 6, COL_CARD_BG);
 
-    u8f.setFont(u8g2_font_6x13_t_cyrillic);
+  // Квадратний годинник справа (години зверху, хвилини знизу)
+  uint16_t clockBoxBg = COL_HEADER_SAFE;
+  if (statusData.alertRaion) clockBoxBg = COL_HEADER_ALERT;
+  else if (statusData.alertOblast || statusData.nearestShahedKm > 0) clockBoxBg = COL_HEADER_WARN;
+
+  tft.fillRoundRect(184, 85, 47, 64, 6, clockBoxBg);
+  char hhBuf[4];
+  char mmBuf[4];
+  snprintf(hhBuf, sizeof(hhBuf), "%02d", timeinfo.tm_hour);
+  snprintf(mmBuf, sizeof(mmBuf), "%02d", timeinfo.tm_min);
+
+  u8f.setFont(u8g2_font_inr24_mn);
+  u8f.setForegroundColor(COL_TEXT_WHITE);
+  u8f.setCursor(192, 113);
+  u8f.print(hhBuf);
+  u8f.setCursor(192, 143);
+  u8f.print(mmBuf);
+
+  // Погода зліва (шрифт 8x13, до 21 символу в рядок)
+  u8f.setFont(u8g2_font_8x13_t_cyrillic);
+  if (weather.valid) {
+    u8f.setForegroundColor(COL_TEXT_YELLOW);
+    u8f.setCursor(10, 99);
+    char wNowBuf[40];
+    snprintf(wNowBuf, sizeof(wNowBuf), "Зараз:%+.0f°(відч%+.0f°)", weather.tempNow, weather.feelsLike);
+    u8f.print(utf8Truncate(String(wNowBuf), 21));
+
     u8f.setForegroundColor(COL_TEXT_CYAN);
-    u8f.setCursor(10, 155);
-    String condNow = weatherCodeToText(weather.codeNow) + " • Вол:" + String(weather.humidity) +
-                     "% • Вітер:" + String(weather.windSpeed, 0) + "м/с";
-    u8f.print(utf8Truncate(condNow, 36));
+    u8f.setCursor(10, 121);
+    String condNow = weatherCodeToText(weather.codeNow) + " " + String(weather.humidity) +
+                     "% " + String(weather.windSpeed, 0) + "м/с";
+    u8f.print(utf8Truncate(condNow, 21));
 
     u8f.setForegroundColor(COL_TEXT_WHITE);
-    u8f.setCursor(10, 173);
-    char wTomBuf[64];
-    snprintf(wTomBuf, sizeof(wTomBuf), "Завтра: %+.0f..%+.0f°C, %s (%d%%)",
+    u8f.setCursor(10, 143);
+    char wTomBuf[48];
+    snprintf(wTomBuf, sizeof(wTomBuf), "Завтра:%+.0f..%+.0f°(%d%%)",
              weather.tempTomorrowMin, weather.tempTomorrowMax,
-             weatherCodeToText(weather.codeTomorrow).c_str(),
              weather.precipProbTomorrow);
-    u8f.print(utf8Truncate(String(wTomBuf), 36));
+    u8f.print(utf8Truncate(String(wTomBuf), 21));
   } else {
-    u8f.setFont(u8g2_font_6x13_t_cyrillic);
     u8f.setForegroundColor(COL_TEXT_GRAY);
-    u8f.setCursor(10, 152);
-    u8f.print("Оновлення погоди Open-Meteo...");
+    u8f.setCursor(10, 121);
+    u8f.print("Оновлення погоди...");
   }
 
-  // --- 3. НИЖНЯ ПЛАШКА: ГРАФІК СВІТЛА ---
-  tft.fillRect(0, 184, 240, 56, COL_OUTAGE_BG);
-  tft.drawFastHLine(0, 184, 240, COL_TEXT_CYAN);
+  // --- 3. НИЖНІЙ БЛОК: ГРАФІК СВІТЛА 5.2 (y = 158..236, висота 78px, весь шрифт 8x13) ---
+  tft.fillRoundRect(4, 158, 232, 78, 6, COL_OUTAGE_BG);
 
   bool inOutageSlot = false;
   String powerHeadline = analyzeOutageWindow(statusData.outageToday, timeinfo.tm_hour, timeinfo.tm_min, inOutageSlot);
 
   u8f.setFont(u8g2_font_8x13_t_cyrillic);
   u8f.setForegroundColor(inOutageSlot ? COL_TEXT_PINK : COL_TEXT_GREEN);
-  u8f.setCursor(8, 201);
-  u8f.print(utf8Truncate(powerHeadline, 28));
+  u8f.setCursor(10, 175);
+  u8f.print(utf8Truncate(powerHeadline, 27));
 
-  u8f.setFont(u8g2_font_6x13_t_cyrillic);
   u8f.setForegroundColor(COL_TEXT_WHITE);
-  u8f.setCursor(8, 218);
-  String lineToday = "Сьогодні 5.2: " + statusData.outageToday;
-  u8f.print(utf8Truncate(lineToday, 36));
+  String lineToday = "Сьогодні: " + statusData.outageToday;
+  printWrappedUtf8(lineToday, 10, 194, 18, 27, 2);
 
   u8f.setForegroundColor(COL_TEXT_GRAY);
-  u8f.setCursor(8, 234);
-  String lineTom = "Завтра 5.2: " + statusData.outageTomorrow;
-  u8f.print(utf8Truncate(lineTom, 36));
+  String lineTom = "Завтра: " + statusData.outageTomorrow;
+  u8f.setCursor(10, 230);
+  u8f.print(utf8Truncate(lineTom, 27));
 }
 
 // ============================================================================
@@ -621,23 +628,24 @@ void handleRoot() {
                   "<h2>Кубик: Кам'янець-Подільський</h2>"
                   "<div class='card'><p><b>Адреса:</b> вул. Розвадовського, 5 (Черга 5.2)</p>");
 
-  html += "<p><b>Погода зараз:</b> " + String(weather.tempNow, 1) + " &deg;C (" + weatherCodeToText(weather.codeNow) + ")</p>";
+  html += "<p><b>Погода зараз:</b> " + String(weather.tempNow, 1) + " &deg;C (" + weatherCodeToText(weather.codeNow) +
+          ", вітер " + String(weather.windSpeed, 1) + " м/с)</p>";
   html += "<p><b>Тривога (UID 135):</b> " + String(statusData.alertRaion ? "АКТИВНА" : "Немає") +
           " (" + statusData.threatDirection + ")</p>";
   html += "<p><a class='btn ota' href='/update'>Прошивка по повітрю (ElegantOTA)</a></p></div>";
 
   html += F("<form class='card' method='POST' action='/save'>"
             "<h3>Налаштування джерел та графіка 5.2</h3>"
-            "<label>Графік черги 5.2 на сьогодні (напр. 06:00-09:00; 16:00-19:00):</label>");
+            "<label>Графік черги 5.2 на сьогодні:</label>");
   html += "<input name='s_today' value='" + String(cfg.schedule_today) + "'>";
 
   html += F("<label>Графік черги 5.2 на завтра:</label>");
   html += "<input name='s_tom' value='" + String(cfg.schedule_tomorrow) + "'>";
 
-  html += F("<label>URL вашого Cloudflare Worker (для авто-парсингу Хмельницькобленерго та Шахедів):</label>");
-  html += "<input name='w_url' value='" + String(cfg.worker_url) + "' placeholder='https://kamianets-cube.yourname.workers.dev'>";
+  html += F("<label>URL вашого Cloudflare Worker:</label>");
+  html += "<input name='w_url' value='" + String(cfg.worker_url) + "' placeholder='https://cube.alexanderbogatov97.workers.dev/'>";
 
-  html += F("<label>Токен alerts.in.ua (необов'язково, якщо є Worker):</label>");
+  html += F("<label>Токен alerts.in.ua (необов'язково):</label>");
   html += "<input name='a_tok' value='" + String(cfg.alerts_token) + "'>";
 
   html += F("<label>Яскравість екрана (10..100%):</label>");
@@ -746,7 +754,7 @@ void loop() {
 
   unsigned long nowMs = millis();
 
-  if (nowMs - lastAlertFetch >= 25000UL) {
+  if (nowMs - lastAlertFetch >= 20000UL) {
     lastAlertFetch = nowMs;
     fetchAlertAndPowerStatus();
   }
@@ -758,8 +766,12 @@ void loop() {
     }
   }
 
-  if (forceRedraw || (nowMs - lastClockDraw >= 1000UL)) {
-    lastClockDraw = nowMs;
+  time_t curNow = time(nullptr);
+  struct tm curTm;
+  localtime_r(&curNow, &curTm);
+
+  if (forceRedraw || curTm.tm_min != lastDrawnMinute) {
+    lastDrawnMinute = curTm.tm_min;
     forceRedraw = false;
     drawScreen();
   }
