@@ -327,13 +327,13 @@ void fetchAlertAndPowerStatus() {
           statusData.nearestShahedPlace = doc["shahed_place"] | "";
           statusData.alertStartedEpoch  = doc["started_at"] | 0UL;
 
-          const char* qToday = doc["queue_5_2_today"];
-          if (qToday && strlen(qToday) > 0) {
+          const char* qToday = doc["queue_5_2_today"] | "";
+          if (strlen(qToday) > 0) {
             statusData.outageToday = String(qToday);
             strncpy(cfg.schedule_today, qToday, sizeof(cfg.schedule_today) - 1);
           }
-          const char* qTom = doc["queue_5_2_tomorrow"];
-          if (qTom && strlen(qTom) > 0) {
+          const char* qTom = doc["queue_5_2_tomorrow"] | "";
+          if (strlen(qTom) > 0) {
             statusData.outageTomorrow = String(qTom);
             strncpy(cfg.schedule_tomorrow, qTom, sizeof(cfg.schedule_tomorrow) - 1);
           }
@@ -405,7 +405,9 @@ void fetchAlertAndPowerStatus() {
       int khmPos = payload.indexOf("Хмельницька область");
       bool active = false;
       if (khmPos >= 0) {
-        String sub = payload.substring(khmPos, min((int)payload.length(), khmPos + 140));
+        int maxIdx = payload.length();
+        if (khmPos + 140 < maxIdx) maxIdx = khmPos + 140;
+        String sub = payload.substring(khmPos, maxIdx);
         active = (sub.indexOf("\"alertnow\":true") >= 0 || sub.indexOf("\"alertnow\":1") >= 0);
       }
       statusData.alertRaion  = active;
@@ -451,12 +453,12 @@ void drawScreen() {
 
   u8f.setFontMode(1);
   u8f.setForegroundColor(COL_TEXT_WHITE);
-  u8f.setFont(u8g2_font_7x13B_t_cyrillic);
+  u8f.setFont(u8g2_font_8x13_t_cyrillic);
 
   if (statusData.alertRaion) {
     u8f.setCursor(8, 16);
     u8f.print("ТРИВОГА • Кам'янець");
-    u8f.setCursor(192, 16);
+    u8f.setCursor(190, 16);
     u8f.print(timeHHMM);
 
     unsigned long durSec = 0;
@@ -495,19 +497,19 @@ void drawScreen() {
   tft.fillRect(0, 68, 240, 116, COL_BG_DARK);
 
   tft.fillRoundRect(4, 72, 232, 46, 5, COL_CARD_BG);
-  u8f.setFont(u8g2_font_7x13B_t_cyrillic);
+  u8f.setFont(u8g2_font_8x13_t_cyrillic);
 
   if (statusData.alertRaion || statusData.nearestShahedKm > 0) {
     u8f.setForegroundColor(COL_TEXT_PINK);
     u8f.setCursor(10, 88);
     if (statusData.nearestShahedKm > 0) {
-      String distLine = "Шахед/ціль: ~" + String(statusData.nearestShahedKm) + " км";
+      String distLine = "Шахед: ~" + String(statusData.nearestShahedKm) + " км";
       if (statusData.nearestShahedPlace.length() > 0) {
         distLine += " (" + statusData.nearestShahedPlace + ")";
       }
-      u8f.print(utf8Truncate(distLine, 30));
+      u8f.print(utf8Truncate(distLine, 27));
     } else {
-      u8f.print(utf8Truncate(statusData.threatType, 30));
+      u8f.print(utf8Truncate(statusData.threatType, 27));
     }
 
     u8f.setFont(u8g2_font_6x13_t_cyrillic);
@@ -527,12 +529,12 @@ void drawScreen() {
 
   tft.fillRoundRect(4, 122, 232, 58, 5, COL_CARD_BG);
   if (weather.valid) {
-    u8f.setFont(u8g2_font_7x13B_t_cyrillic);
+    u8f.setFont(u8g2_font_8x13_t_cyrillic);
     u8f.setForegroundColor(COL_TEXT_YELLOW);
     u8f.setCursor(10, 139);
     char wNowBuf[48];
     snprintf(wNowBuf, sizeof(wNowBuf), "Зараз: %+.0f°C (відч. %+.0f°)", weather.tempNow, weather.feelsLike);
-    u8f.print(wNowBuf);
+    u8f.print(utf8Truncate(String(wNowBuf), 27));
 
     u8f.setFont(u8g2_font_6x13_t_cyrillic);
     u8f.setForegroundColor(COL_TEXT_CYAN);
@@ -546,4 +548,195 @@ void drawScreen() {
     char wTomBuf[64];
     snprintf(wTomBuf, sizeof(wTomBuf), "Завтра: %+.0f..%+.0f°C, %s (%d%%)",
              weather.tempTomorrowMin, weather.tempTomorrowMax,
-             weatherCodeToText(weather.code
+             weatherCodeToText(weather.codeTomorrow).c_str(),
+             weather.precipProbTomorrow);
+    u8f.print(utf8Truncate(String(wTomBuf), 36));
+  } else {
+    u8f.setFont(u8g2_font_6x13_t_cyrillic);
+    u8f.setForegroundColor(COL_TEXT_GRAY);
+    u8f.setCursor(10, 152);
+    u8f.print("Оновлення погоди Open-Meteo...");
+  }
+
+  // --- 3. НИЖНЯ ПЛАШКА: ГРАФІК СВІТЛА ---
+  tft.fillRect(0, 184, 240, 56, COL_OUTAGE_BG);
+  tft.drawFastHLine(0, 184, 240, COL_TEXT_CYAN);
+
+  bool inOutageSlot = false;
+  String powerHeadline = analyzeOutageWindow(statusData.outageToday, timeinfo.tm_hour, timeinfo.tm_min, inOutageSlot);
+
+  u8f.setFont(u8g2_font_8x13_t_cyrillic);
+  u8f.setForegroundColor(inOutageSlot ? COL_TEXT_PINK : COL_TEXT_GREEN);
+  u8f.setCursor(8, 201);
+  u8f.print(utf8Truncate(powerHeadline, 28));
+
+  u8f.setFont(u8g2_font_6x13_t_cyrillic);
+  u8f.setForegroundColor(COL_TEXT_WHITE);
+  u8f.setCursor(8, 218);
+  String lineToday = "Сьогодні 5.2: " + statusData.outageToday;
+  u8f.print(utf8Truncate(lineToday, 36));
+
+  u8f.setForegroundColor(COL_TEXT_GRAY);
+  u8f.setCursor(8, 234);
+  String lineTom = "Завтра 5.2: " + statusData.outageTomorrow;
+  u8f.print(utf8Truncate(lineTom, 36));
+}
+
+// ============================================================================
+// 7. ВЕБ-ІНТЕРФЕЙС НАЛАШТУВАНЬ + ELEGANT OTA
+// ============================================================================
+void handleRoot() {
+  String html = F("<!DOCTYPE html><html lang='uk'><head><meta charset='utf-8'>"
+                  "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                  "<title>Кубик Кам'янець-Подільський (Черга 5.2)</title>"
+                  "<style>body{font-family:sans-serif;background:#0f172a;color:#f8fafc;max-width:520px;margin:16px auto;padding:16px}"
+                  ".card{background:#1e293b;padding:16px;border-radius:12px;margin-bottom:16px}"
+                  "input{width:100%;padding:8px;margin:6px 0 12px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;box-sizing:border-box}"
+                  "button,.btn{display:inline-block;background:#2563eb;color:#fff;padding:10px 16px;border:none;border-radius:8px;text-decoration:none;cursor:pointer;font-weight:bold}"
+                  ".ota{background:#059669;margin-top:8px}</style></head><body>"
+                  "<h2>Кубик: Кам'янець-Подільський</h2>"
+                  "<div class='card'><p><b>Адреса:</b> вул. Розвадовського, 5 (Черга 5.2)</p>");
+
+  html += "<p><b>Погода зараз:</b> " + String(weather.tempNow, 1) + " &deg;C (" + weatherCodeToText(weather.codeNow) + ")</p>";
+  html += "<p><b>Тривога (UID 135):</b> " + String(statusData.alertRaion ? "АКТИВНА" : "Немає") +
+          " (" + statusData.threatDirection + ")</p>";
+  html += "<p><a class='btn ota' href='/update'>Прошивка по повітрю (ElegantOTA)</a></p></div>";
+
+  html += F("<form class='card' method='POST' action='/save'>"
+            "<h3>Налаштування джерел та графіка 5.2</h3>"
+            "<label>Графік черги 5.2 на сьогодні (напр. 06:00-09:00; 16:00-19:00):</label>");
+  html += "<input name='s_today' value='" + String(cfg.schedule_today) + "'>";
+
+  html += F("<label>Графік черги 5.2 на завтра:</label>");
+  html += "<input name='s_tom' value='" + String(cfg.schedule_tomorrow) + "'>";
+
+  html += F("<label>URL вашого Cloudflare Worker (для авто-парсингу Хмельницькобленерго та Шахедів):</label>");
+  html += "<input name='w_url' value='" + String(cfg.worker_url) + "' placeholder='https://kamianets-cube.yourname.workers.dev'>";
+
+  html += F("<label>Токен alerts.in.ua (необов'язково, якщо є Worker):</label>");
+  html += "<input name='a_tok' value='" + String(cfg.alerts_token) + "'>";
+
+  html += F("<label>Яскравість екрана (10..100%):</label>");
+  html += "<input type='number' name='bright' min='10' max='100' value='" + String(cfg.brightness) + "'>";
+
+  html += F("<label>Поворот екрана (0, 1, 2 або 3):</label>");
+  html += "<input type='number' name='rot' min='0' max='3' value='" + String(cfg.rotation) + "'>";
+
+  html += F("<label>Wi-Fi мережа (SSID):</label>");
+  html += "<input name='ssid' value='" + String(cfg.wifi_ssid) + "'>";
+  html += F("<label>Пароль Wi-Fi (залиште порожнім, щоб не змінювати):</label>"
+            "<input type='password' name='pass' placeholder='********'>"
+            "<button type='submit'>Зберегти та оновити екран</button></form></body></html>");
+
+  server.send(200, "text/html; charset=utf-8", html);
+}
+
+void handleSave() {
+  if (server.hasArg("s_today")) {
+    strncpy(cfg.schedule_today, server.arg("s_today").c_str(), sizeof(cfg.schedule_today) - 1);
+    statusData.outageToday = String(cfg.schedule_today);
+  }
+  if (server.hasArg("s_tom")) {
+    strncpy(cfg.schedule_tomorrow, server.arg("s_tom").c_str(), sizeof(cfg.schedule_tomorrow) - 1);
+    statusData.outageTomorrow = String(cfg.schedule_tomorrow);
+  }
+  if (server.hasArg("w_url")) {
+    strncpy(cfg.worker_url, server.arg("w_url").c_str(), sizeof(cfg.worker_url) - 1);
+  }
+  if (server.hasArg("a_tok")) {
+    strncpy(cfg.alerts_token, server.arg("a_tok").c_str(), sizeof(cfg.alerts_token) - 1);
+  }
+  if (server.hasArg("bright")) {
+    cfg.brightness = (uint8_t)constrain(server.arg("bright").toInt(), 10, 100);
+    applyBacklight(cfg.brightness);
+  }
+  if (server.hasArg("rot")) {
+    cfg.rotation = (uint8_t)constrain(server.arg("rot").toInt(), 0, 3);
+    tft.setRotation(cfg.rotation);
+  }
+  if (server.hasArg("ssid") && server.arg("ssid").length() > 0) {
+    strncpy(cfg.wifi_ssid, server.arg("ssid").c_str(), sizeof(cfg.wifi_ssid) - 1);
+  }
+  if (server.hasArg("pass") && server.arg("pass").length() > 0) {
+    strncpy(cfg.wifi_pass, server.arg("pass").c_str(), sizeof(cfg.wifi_pass) - 1);
+  }
+
+  saveConfig();
+  fetchWeatherFromOpenMeteo();
+  fetchAlertAndPowerStatus();
+  forceRedraw = true;
+
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+// ============================================================================
+// 8. SETUP ТА LOOP
+// ============================================================================
+void setup() {
+  Serial.begin(115200);
+  loadConfig();
+
+  pinMode(TFT_BL_PIN, OUTPUT);
+  applyBacklight(cfg.brightness);
+
+  tft.init();
+  tft.setRotation(cfg.rotation);
+  tft.fillScreen(COL_BG_DARK);
+
+  u8f.begin(tft);
+  u8f.setFontMode(1);
+  u8f.setFont(u8g2_font_8x13_t_cyrillic);
+  u8f.setForegroundColor(COL_TEXT_WHITE);
+  u8f.setCursor(12, 40);
+  u8f.print("Підключення до 2,4/5G...");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(cfg.wifi_ssid, cfg.wifi_pass);
+
+  unsigned long startAttempt = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 15000) {
+    delay(250);
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP("Kamianets-Cube-OTA");
+  }
+
+  configTime("EET-2EEST,M3.5.0/3,M10.5.0/4", "europe.pool.ntp.org", "pool.ntp.org");
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/save", HTTP_POST, handleSave);
+  ElegantOTA.begin(&server);
+  server.begin();
+
+  fetchWeatherFromOpenMeteo();
+  fetchAlertAndPowerStatus();
+  drawScreen();
+}
+
+void loop() {
+  server.handleClient();
+  ElegantOTA.loop();
+
+  unsigned long nowMs = millis();
+
+  if (nowMs - lastAlertFetch >= 25000UL) {
+    lastAlertFetch = nowMs;
+    fetchAlertAndPowerStatus();
+  }
+
+  if (nowMs - lastWeatherFetch >= 900000UL || !weather.valid) {
+    if (nowMs - lastWeatherFetch >= 30000UL) {
+      lastWeatherFetch = nowMs;
+      fetchWeatherFromOpenMeteo();
+    }
+  }
+
+  if (forceRedraw || (nowMs - lastClockDraw >= 1000UL)) {
+    lastClockDraw = nowMs;
+    forceRedraw = false;
+    drawScreen();
+  }
+}
