@@ -12,43 +12,36 @@
 #include <ElegantOTA.h>
 
 // ============================================================================
-// 1. НАЛАШТУВАННЯ ЗА ЗАМОВЧУВАННЯМ (вже прописано вашу мережу 2,4/5G)
+// 1. НАЛАШТУВАННЯ ЗА ЗАМОВЧУВАННЯМ
 // ============================================================================
 const char* DEFAULT_WIFI_SSID     = "2,4/5G";
 const char* DEFAULT_WIFI_PASS     = "Sasha1997";
 
-// Якщо ви розгорнули супровідний скрипт cloudflare_worker.js, вставте його URL сюди
-// або у веб-інтерфейсі кубика http://192.168.0.127/
 const char* DEFAULT_WORKER_URL    = "";
-
-// Якщо використовуєте прямий запит до https://devs.alerts.in.ua/ без Worker-а:
 const char* DEFAULT_ALERTS_TOKEN  = "";
 
 // Координати м. Кам'янець-Подільський (вул. Розвадовського, 5)
 const float KAMIANETS_LAT         = 48.6845f;
 const float KAMIANETS_LON         = 26.5856f;
 
-// UID локацій у сервісі alerts.in.ua (https://devs.alerts.in.ua/)
+// UID локацій у сервісі alerts.in.ua
 const int   UID_KAMIANETS_RAION   = 135; // Кам'янець-Подільський район
 const int   UID_KHMELNYTSKYI_OBL  = 3;   // Хмельницька область
 
-// Початковий графік для Черги 5.2 (підтягується автоматично з Worker або редагується на http://<IP>/)
 const char* DEFAULT_QUEUE_TODAY   = "06:00-09:00; 16:00-19:00";
 const char* DEFAULT_QUEUE_TOMORROW= "Очікується від Хмельницькобленерго";
 
-// Піни підсвітки та кнопки для GeekMagic SmallTV (ESP8266)
-// Документація платформи: https://giovi321.github.io/smalltv-mod/getting-started/hardware/
 #ifndef TFT_BL_PIN
-#define TFT_BL_PIN 5   // GPIO5 керує підсвіткою (PWM, active-low)
+#define TFT_BL_PIN 5
 #endif
 
 // Кольори RGB565 для екрана 240x240
-#define COL_BG_DARK       0x0863  // Глибокий темно-синій фон
-#define COL_HEADER_SAFE   0x0312  // Спокійний синьо-бірюзовий
-#define COL_HEADER_WARN   0xD340  // Помаранчевий (тривога в сусідніх р-нах / БПЛА)
-#define COL_HEADER_ALERT  0xE129  // Яскраво-рожевий / червоний (ТРИВОГА в районі, як на скріншоті)
-#define COL_CARD_BG       0x10E5  // Фон карток
-#define COL_OUTAGE_BG     0x18E7  // Фон нижньої панелі світла
+#define COL_BG_DARK       0x0863
+#define COL_HEADER_SAFE   0x0312
+#define COL_HEADER_WARN   0xD340
+#define COL_HEADER_ALERT  0xE129
+#define COL_CARD_BG       0x10E5
+#define COL_OUTAGE_BG     0x18E7
 #define COL_TEXT_WHITE    0xFFFF
 #define COL_TEXT_CYAN     0x67FF
 #define COL_TEXT_YELLOW   0xFFE0
@@ -67,11 +60,11 @@ struct Config {
   char alerts_token[64];
   char schedule_today[64];
   char schedule_tomorrow[64];
-  uint8_t brightness; // 0..100 %
-  uint8_t rotation;   // 0..3
+  uint8_t brightness;
+  uint8_t rotation;
 };
 
-const uint32_t CONFIG_MAGIC = 0x534D5457; // "SMTW" (оновлений маркер із мережею 2,4/5G)
+const uint32_t CONFIG_MAGIC = 0x534D5457;
 Config cfg;
 
 struct WeatherData {
@@ -89,14 +82,14 @@ struct WeatherData {
 } weather;
 
 struct AlertAndPowerData {
-  bool alertRaion = false;        // Тривога в Кам'янець-Подільському р-ні (UID 135)
-  bool alertOblast = false;       // Тривога в Хмельницькій області (UID 3)
-  String alertLevel = "none";     // "red", "yellow", "none"
+  bool alertRaion = false;
+  bool alertOblast = false;
+  String alertLevel = "none";
   String threatType = "Немає загроз";
   String threatDirection = "В районі спокійно";
-  int nearestShahedKm = -1;       // Відстань до найближчого БПЛА/цілі у км (-1 якщо немає даних)
-  String nearestShahedPlace = ""; // Назва орієнтира (напр. "Дунаївці" або "Бар")
-  unsigned long alertStartedEpoch = 0; // Час початку тривоги (UTC epoch)
+  int nearestShahedKm = -1;
+  String nearestShahedPlace = "";
+  unsigned long alertStartedEpoch = 0;
   String outageToday = DEFAULT_QUEUE_TODAY;
   String outageTomorrow = DEFAULT_QUEUE_TOMORROW;
   unsigned long lastUpdate = 0;
@@ -112,8 +105,24 @@ unsigned long lastAlertFetch = 0;
 bool forceRedraw = true;
 
 // ============================================================================
-// 3. ДОПОМІЖНІ ФУНКЦІЇ EEPROM ТА ПІДСВІТКИ
+// 3. ДОПОМІЖНІ ФУНКЦІЇ (UTF-8 ОБРІЗКА, EEPROM, ПІДСВІТКА)
 // ============================================================================
+String utf8Truncate(const String& str, size_t maxChars) {
+  size_t charCount = 0;
+  size_t byteIndex = 0;
+  size_t len = str.length();
+  while (byteIndex < len && charCount < maxChars) {
+    uint8_t c = (uint8_t)str[byteIndex];
+    if ((c & 0x80) == 0) byteIndex += 1;
+    else if ((c & 0xE0) == 0xC0) byteIndex += 2;
+    else if ((c & 0xF0) == 0xE0) byteIndex += 3;
+    else byteIndex += 4;
+    charCount++;
+  }
+  if (byteIndex > len) byteIndex = len;
+  return str.substring(0, byteIndex);
+}
+
 void applyBacklight(uint8_t percent) {
   if (percent > 100) percent = 100;
   int pwmVal = map(100 - percent, 0, 100, 0, 255);
@@ -150,7 +159,7 @@ void loadConfig() {
 }
 
 // ============================================================================
-// 4. РОЗБІР КОДІВ ПОГОДИ WMO (Open-Meteo) ТА ГРАФІКІВ СВІТЛА (Черга 5.2)
+// 4. ПОГОДА WMO ТА АНАЛІЗ ГРАФІКА СВІТЛА (Черга 5.2)
 // ============================================================================
 String weatherCodeToText(int code) {
   switch (code) {
@@ -240,7 +249,7 @@ String analyzeOutageWindow(const String& scheduleStr, int curHour, int curMin, b
 }
 
 // ============================================================================
-// 5. ЗАПИТИ ДО API: ПОГОДА (Open-Meteo) ТА ТРИВОГИ / СВІТЛО
+// 5. ЗАПИТИ ДО API: ПОГОДА ТА ТРИВОГИ / СВІТЛО
 // ============================================================================
 void fetchWeatherFromOpenMeteo() {
   if (WiFi.status() != WL_CONNECTED) return;
@@ -248,7 +257,6 @@ void fetchWeatherFromOpenMeteo() {
   WiFiClient client;
   HTTPClient http;
 
-  // Прямий запит до Open-Meteo API (https://open-meteo.com/en/docs) для м. Кам'янець-Подільський
   String url = "http://api.open-meteo.com/v1/forecast?latitude=" + String(KAMIANETS_LAT, 4) +
                "&longitude=" + String(KAMIANETS_LON, 4) +
                "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m" +
@@ -285,7 +293,7 @@ void fetchWeatherFromOpenMeteo() {
 void fetchAlertAndPowerStatus() {
   if (WiFi.status() != WL_CONNECTED) return;
 
-  // Варіант А: Якщо вказано URL власного Cloudflare Worker (дає і графік 5.2, і відстань до Шахедів)
+  // Варіант А: Cloudflare Worker
   if (strlen(cfg.worker_url) > 8) {
     std::unique_ptr<BearSSL::WiFiClientSecure> secClient(new BearSSL::WiFiClientSecure);
     secClient->setInsecure();
@@ -309,7 +317,6 @@ void fetchAlertAndPowerStatus() {
         JsonDocument doc;
         DeserializationError err = deserializeJson(doc, http.getStream());
         if (!err) {
-          bool prevAlert = statusData.alertRaion;
           statusData.alertRaion         = doc["alert_raion"] | false;
           statusData.alertOblast        = doc["alert_oblast"] | false;
           statusData.alertLevel         = doc["alert_level"] | "none";
@@ -330,9 +337,6 @@ void fetchAlertAndPowerStatus() {
             strncpy(cfg.schedule_tomorrow, qTom, sizeof(cfg.schedule_tomorrow) - 1);
           }
 
-          if (prevAlert != statusData.alertRaion) {
-            forceRedraw = true;
-          }
           statusData.lastUpdate = millis();
           forceRedraw = true;
         }
@@ -342,8 +346,7 @@ void fetchAlertAndPowerStatus() {
     return;
   }
 
-  // Варіант Б: Якщо є токен alerts.in.ua — опитуємо напряму Кам'янець-Подільський район (UID 135)
-  // Документація: https://devs.alerts.in.ua/
+  // Варіант Б: Прямий запит до alerts.in.ua з токеном
   if (strlen(cfg.alerts_token) > 5) {
     std::unique_ptr<BearSSL::WiFiClientSecure> secClient(new BearSSL::WiFiClientSecure);
     secClient->setInsecure();
@@ -389,8 +392,7 @@ void fetchAlertAndPowerStatus() {
     return;
   }
 
-  // Варіант В (Автономний без ключів): Відкритий API Повітряних тривог Ubilling
-  // Документація: https://wiki.ubilling.net.ua/doku.php?id=aerialalertsapi
+  // Варіант В: Відкритий API Повітряних тривог Ubilling (без ключів)
   WiFiClient plainClient;
   HTTPClient http;
   http.setTimeout(5000);
@@ -399,7 +401,6 @@ void fetchAlertAndPowerStatus() {
     if (code == HTTP_CODE_OK) {
       String payload = http.getString();
       bool wasAlert = statusData.alertRaion;
-      // Перевіряємо згадку Хмельницької області в активному стані
       int khmPos = payload.indexOf("Хмельницька область");
       bool active = false;
       if (khmPos >= 0) {
@@ -427,7 +428,7 @@ void fetchAlertAndPowerStatus() {
 }
 
 // ============================================================================
-// 6. ВІДМАЛЬОВУВАННЯ ЕКРАНА 240x240 (У СТИЛІ СКРІНШОТА З ТРИВОГОЮ І СВІТЛОМ)
+// 6. ВІДМАЛЬОВУВАННЯ ЕКРАНА 240x240
 // ============================================================================
 void drawScreen() {
   time_t now = time(nullptr);
@@ -444,7 +445,7 @@ void drawScreen() {
     headerColor = COL_HEADER_WARN;
   }
 
-  // --- 1. ВЕРХНЯ ШАПКА (висота 68 пікселів) ---
+  // --- 1. ВЕРХНЯ ШАПКА ---
   tft.fillRect(0, 0, 240, 68, headerColor);
 
   u8f.setFontMode(1);
@@ -469,7 +470,7 @@ void drawScreen() {
     } else {
       snprintf(durBuf, sizeof(durBuf), "%02u:%02u", mins, secs);
     }
-    u8f.setFont(u8g2_font_inr24_t_cyrillic);
+    u8f.setFont(u8g2_font_inr24_tn);
     u8f.setForegroundColor(COL_TEXT_CYAN);
     u8f.setCursor(8, 56);
     u8f.print(durBuf);
@@ -483,16 +484,15 @@ void drawScreen() {
 
     char fullTime[12];
     snprintf(fullTime, sizeof(fullTime), "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-    u8f.setFont(u8g2_font_inr24_t_cyrillic);
+    u8f.setFont(u8g2_font_inr24_tn);
     u8f.setForegroundColor(COL_TEXT_WHITE);
     u8f.setCursor(8, 56);
     u8f.print(fullTime);
   }
 
-  // --- 2. СЕРЕДНІЙ БЛОК: ЗАГРОЗИ / ШАХЕДИ + ПОГОДА НА СЬОГОДНІ І ЗАВТРА (Y: 68..184) ---
+  // --- 2. СЕРЕДНІЙ БЛОК ---
   tft.fillRect(0, 68, 240, 116, COL_BG_DARK);
 
-  // Підблок 2А: Загроза в районі або відстань до найближчого Шахеда (Y: 70..118)
   tft.fillRoundRect(4, 72, 232, 46, 5, COL_CARD_BG);
   u8f.setFont(u8g2_font_7x14B_t_cyrillic);
 
@@ -504,15 +504,15 @@ void drawScreen() {
       if (statusData.nearestShahedPlace.length() > 0) {
         distLine += " (" + statusData.nearestShahedPlace + ")";
       }
-      u8f.print(distLine);
+      u8f.print(utf8Truncate(distLine, 30));
     } else {
-      u8f.print(statusData.threatType);
+      u8f.print(utf8Truncate(statusData.threatType, 30));
     }
 
     u8f.setFont(u8g2_font_6x13_t_cyrillic);
     u8f.setForegroundColor(COL_TEXT_WHITE);
     u8f.setCursor(10, 108);
-    u8f.print(statusData.threatDirection.substring(0, 34));
+    u8f.print(utf8Truncate(statusData.threatDirection, 35));
   } else {
     u8f.setForegroundColor(COL_TEXT_GREEN);
     u8f.setCursor(10, 88);
@@ -524,7 +524,6 @@ void drawScreen() {
     u8f.print("Розвадовського, 5 • Черга 5.2");
   }
 
-  // Підблок 2Б: Погода зараз та прогноз на завтра (Y: 122..182)
   tft.fillRoundRect(4, 122, 232, 58, 5, COL_CARD_BG);
   if (weather.valid) {
     u8f.setFont(u8g2_font_7x14B_t_cyrillic);
@@ -539,7 +538,7 @@ void drawScreen() {
     u8f.setCursor(10, 155);
     String condNow = weatherCodeToText(weather.codeNow) + " • Вол:" + String(weather.humidity) +
                      "% • Вітер:" + String(weather.windSpeed, 0) + "м/с";
-    u8f.print(condNow);
+    u8f.print(utf8Truncate(condNow, 36));
 
     u8f.setForegroundColor(COL_TEXT_WHITE);
     u8f.setCursor(10, 173);
@@ -548,7 +547,7 @@ void drawScreen() {
              weather.tempTomorrowMin, weather.tempTomorrowMax,
              weatherCodeToText(weather.codeTomorrow).c_str(),
              weather.precipProbTomorrow);
-    u8f.print(wTomBuf);
+    u8f.print(utf8Truncate(String(wTomBuf), 36));
   } else {
     u8f.setFont(u8g2_font_6x13_t_cyrillic);
     u8f.setForegroundColor(COL_TEXT_GRAY);
@@ -556,7 +555,7 @@ void drawScreen() {
     u8f.print("Оновлення погоди Open-Meteo...");
   }
 
-  // --- 3. НИЖНЯ ПЛАШКА: ГРАФІК СВІТЛА (Черга 5.2, вул. Розвадовського 5) (Y: 184..240) ---
+  // --- 3. НИЖНЯ ПЛАШКА: ГРАФІК СВІТЛА ---
   tft.fillRect(0, 184, 240, 56, COL_OUTAGE_BG);
   tft.drawFastHLine(0, 184, 240, COL_TEXT_CYAN);
 
@@ -566,22 +565,22 @@ void drawScreen() {
   u8f.setFont(u8g2_font_7x14B_t_cyrillic);
   u8f.setForegroundColor(inOutageSlot ? COL_TEXT_PINK : COL_TEXT_GREEN);
   u8f.setCursor(8, 201);
-  u8f.print(powerHeadline);
+  u8f.print(utf8Truncate(powerHeadline, 31));
 
   u8f.setFont(u8g2_font_6x13_t_cyrillic);
   u8f.setForegroundColor(COL_TEXT_WHITE);
   u8f.setCursor(8, 218);
   String lineToday = "Сьогодні 5.2: " + statusData.outageToday;
-  u8f.print(lineToday.substring(0, 36));
+  u8f.print(utf8Truncate(lineToday, 36));
 
   u8f.setForegroundColor(COL_TEXT_GRAY);
   u8f.setCursor(8, 234);
   String lineTom = "Завтра 5.2: " + statusData.outageTomorrow;
-  u8f.print(lineTom.substring(0, 36));
+  u8f.print(utf8Truncate(lineTom, 36));
 }
 
 // ============================================================================
-// 7. ВЕБ-ІНТЕРФЕЙС НАЛАШТУВАНЬ (http://<IP_КУБИКА>/) + ELEGANT OTA (/update)
+// 7. ВЕБ-ІНТЕРФЕЙС НАЛАШТУВАНЬ + ELEGANT OTA
 // ============================================================================
 void handleRoot() {
   String html = F("<!DOCTYPE html><html lang='uk'><head><meta charset='utf-8'>"
@@ -702,7 +701,6 @@ void setup() {
     WiFi.softAP("Kamianets-Cube-OTA");
   }
 
-  // Сервери точного часу: https://www.ntppool.org/en/zone/europe
   configTime("EET-2EEST,M3.5.0/3,M10.5.0/4", "europe.pool.ntp.org", "pool.ntp.org");
 
   server.on("/", HTTP_GET, handleRoot);
