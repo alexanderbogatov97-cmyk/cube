@@ -1,0 +1,38 @@
+name: Build ESP8266 SmallTV Firmware (.bin)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade platformio
+
+      - name: Prepare src directory if .ino is in root
+        run: |
+          mkdir -p src
+          if [ -f smalltv_kamianets_firmware.ino ]; then
+            cp smalltv_kamianets_firmware.ino src/main.cpp
+          fi
+
+      - name: Build firmware.bin for GeekMagic SmallTV ESP8266
+        run: pio run -e smalltv_esp8266
+
+      - name: Upload ready-to-flash firmware.bin
+        uses: actions/upload-artifact@v4
+        with:
+          name: smalltv-kamianets-firmware-bin
+          path: .pio/build/smalltv_esp8266/firmware.bin
