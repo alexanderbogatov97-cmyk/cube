@@ -97,7 +97,7 @@ struct AlertAndPowerData {
 } statusData;
 
 TFT_eSPI tft = TFT_eSPI();
-U8G2_FOR_TFT_ESPI u8f;
+U8g2_for_TFT_eSPI u8f;
 ESP8266WebServer server(80);
 
 unsigned long lastClockDraw = 0;
@@ -396,4 +396,154 @@ void fetchAlertAndPowerStatus() {
   // Варіант В: Відкритий API Повітряних тривог Ubilling (без ключів)
   WiFiClient plainClient;
   HTTPClient http;
-  http.set
+  http.setTimeout(5000);
+  if (http.begin(plainClient, "http://airraid.net.ua/api/?states=1")) {
+    int code = http.GET();
+    if (code == HTTP_CODE_OK) {
+      String payload = http.getString();
+      bool wasAlert = statusData.alertRaion;
+      int khmPos = payload.indexOf("Хмельницька область");
+      bool active = false;
+      if (khmPos >= 0) {
+        String sub = payload.substring(khmPos, min((int)payload.length(), khmPos + 140));
+        active = (sub.indexOf("\"alertnow\":true") >= 0 || sub.indexOf("\"alertnow\":1") >= 0);
+      }
+      statusData.alertRaion  = active;
+      statusData.alertOblast = active;
+      if (active) {
+        statusData.alertLevel      = "red";
+        statusData.threatType      = "ПОВІТРЯНА ТРИВОГА";
+        statusData.threatDirection = "Хмельницька область";
+        if (!wasAlert) statusData.alertStartedEpoch = time(nullptr);
+      } else {
+        statusData.alertLevel      = "none";
+        statusData.threatType      = "Немає загроз";
+        statusData.threatDirection = "Хмельниччина: спокійно";
+        statusData.alertStartedEpoch = 0;
+      }
+      statusData.lastUpdate = millis();
+      forceRedraw = true;
+    }
+    http.end();
+  }
+}
+
+// ============================================================================
+// 6. ВІДМАЛЬОВУВАННЯ ЕКРАНА 240x240
+// ============================================================================
+void drawScreen() {
+  time_t now = time(nullptr);
+  struct tm timeinfo;
+  localtime_r(&now, &timeinfo);
+
+  char timeHHMM[8];
+  snprintf(timeHHMM, sizeof(timeHHMM), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+
+  uint16_t headerColor = COL_HEADER_SAFE;
+  if (statusData.alertRaion) {
+    headerColor = COL_HEADER_ALERT;
+  } else if (statusData.alertOblast || statusData.nearestShahedKm > 0) {
+    headerColor = COL_HEADER_WARN;
+  }
+
+  // --- 1. ВЕРХНЯ ШАПКА ---
+  tft.fillRect(0, 0, 240, 68, headerColor);
+
+  u8f.setFontMode(1);
+  u8f.setForegroundColor(COL_TEXT_WHITE);
+  u8f.setFont(u8g2_font_7x13B_t_cyrillic);
+
+  if (statusData.alertRaion) {
+    u8f.setCursor(8, 16);
+    u8f.print("ТРИВОГА • Кам'янець");
+    u8f.setCursor(192, 16);
+    u8f.print(timeHHMM);
+
+    unsigned long durSec = 0;
+    if (statusData.alertStartedEpoch > 100000 && (unsigned long)now >= statusData.alertStartedEpoch) {
+      durSec = (unsigned long)now - statusData.alertStartedEpoch;
+    }
+    char durBuf[12];
+    unsigned int mins = durSec / 60;
+    unsigned int secs = durSec % 60;
+    if (mins >= 60) {
+      snprintf(durBuf, sizeof(durBuf), "%02u:%02u:%02u", mins / 60, mins % 60, secs);
+    } else {
+      snprintf(durBuf, sizeof(durBuf), "%02u:%02u", mins, secs);
+    }
+    u8f.setFont(u8g2_font_inr24_tn);
+    u8f.setForegroundColor(COL_TEXT_CYAN);
+    u8f.setCursor(8, 56);
+    u8f.print(durBuf);
+  } else {
+    u8f.setCursor(8, 16);
+    if (statusData.nearestShahedKm > 0) {
+      u8f.print("УВАГА • БПЛА в регіоні");
+    } else {
+      u8f.print("Кам'янець-Подільський");
+    }
+
+    char fullTime[12];
+    snprintf(fullTime, sizeof(fullTime), "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    u8f.setFont(u8g2_font_inr24_tn);
+    u8f.setForegroundColor(COL_TEXT_WHITE);
+    u8f.setCursor(8, 56);
+    u8f.print(fullTime);
+  }
+
+  // --- 2. СЕРЕДНІЙ БЛОК ---
+  tft.fillRect(0, 68, 240, 116, COL_BG_DARK);
+
+  tft.fillRoundRect(4, 72, 232, 46, 5, COL_CARD_BG);
+  u8f.setFont(u8g2_font_7x13B_t_cyrillic);
+
+  if (statusData.alertRaion || statusData.nearestShahedKm > 0) {
+    u8f.setForegroundColor(COL_TEXT_PINK);
+    u8f.setCursor(10, 88);
+    if (statusData.nearestShahedKm > 0) {
+      String distLine = "Шахед/ціль: ~" + String(statusData.nearestShahedKm) + " км";
+      if (statusData.nearestShahedPlace.length() > 0) {
+        distLine += " (" + statusData.nearestShahedPlace + ")";
+      }
+      u8f.print(utf8Truncate(distLine, 30));
+    } else {
+      u8f.print(utf8Truncate(statusData.threatType, 30));
+    }
+
+    u8f.setFont(u8g2_font_6x13_t_cyrillic);
+    u8f.setForegroundColor(COL_TEXT_WHITE);
+    u8f.setCursor(10, 108);
+    u8f.print(utf8Truncate(statusData.threatDirection, 35));
+  } else {
+    u8f.setForegroundColor(COL_TEXT_GREEN);
+    u8f.setCursor(10, 88);
+    u8f.print("Район: без тривог і БПЛА");
+
+    u8f.setFont(u8g2_font_6x13_t_cyrillic);
+    u8f.setForegroundColor(COL_TEXT_GRAY);
+    u8f.setCursor(10, 108);
+    u8f.print("Розвадовського, 5 • Черга 5.2");
+  }
+
+  tft.fillRoundRect(4, 122, 232, 58, 5, COL_CARD_BG);
+  if (weather.valid) {
+    u8f.setFont(u8g2_font_7x13B_t_cyrillic);
+    u8f.setForegroundColor(COL_TEXT_YELLOW);
+    u8f.setCursor(10, 139);
+    char wNowBuf[48];
+    snprintf(wNowBuf, sizeof(wNowBuf), "Зараз: %+.0f°C (відч. %+.0f°)", weather.tempNow, weather.feelsLike);
+    u8f.print(wNowBuf);
+
+    u8f.setFont(u8g2_font_6x13_t_cyrillic);
+    u8f.setForegroundColor(COL_TEXT_CYAN);
+    u8f.setCursor(10, 155);
+    String condNow = weatherCodeToText(weather.codeNow) + " • Вол:" + String(weather.humidity) +
+                     "% • Вітер:" + String(weather.windSpeed, 0) + "м/с";
+    u8f.print(utf8Truncate(condNow, 36));
+
+    u8f.setForegroundColor(COL_TEXT_WHITE);
+    u8f.setCursor(10, 173);
+    char wTomBuf[64];
+    snprintf(wTomBuf, sizeof(wTomBuf), "Завтра: %+.0f..%+.0f°C, %s (%d%%)",
+             weather.tempTomorrowMin, weather.tempTomorrowMax,
+             weatherCodeToText(weather.code
