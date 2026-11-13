@@ -473,7 +473,7 @@ void drawScreen() {
     } else {
       snprintf(durBuf, sizeof(durBuf), "%02u:%02u", mins, secs);
     }
-    u8f.setFont(u8g2_font_inr24_mn);
+    u8f.setFont(u8g2_font_inr24_tn);
     u8f.setForegroundColor(COL_TEXT_CYAN);
     u8f.setCursor(8, 56);
     u8f.print(durBuf);
@@ -487,7 +487,7 @@ void drawScreen() {
 
     char fullTime[12];
     snprintf(fullTime, sizeof(fullTime), "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-    u8f.setFont(u8g2_font_inr24_mn);
+    u8f.setFont(u8g2_font_inr24_tn);
     u8f.setForegroundColor(COL_TEXT_WHITE);
     u8f.setCursor(8, 56);
     u8f.print(fullTime);
