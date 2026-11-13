@@ -36,19 +36,19 @@ const char* DEFAULT_QUEUE_TOMORROW= "Очікується від Хмельни�
 #define TFT_BL_PIN 5
 #endif
 
-// Кольори RGB565 для екрана 240x240
-#define COL_BG_DARK       0x0863
-#define COL_HEADER_SAFE   0x0312
-#define COL_HEADER_WARN   0xD340
-#define COL_HEADER_ALERT  0xE129
-#define COL_CARD_BG       0x10E5
-#define COL_OUTAGE_BG     0x18E7
-#define COL_TEXT_WHITE    0xFFFF
-#define COL_TEXT_CYAN     0x67FF
-#define COL_TEXT_YELLOW   0xFFE0
-#define COL_TEXT_GREEN    0x4FE8
-#define COL_TEXT_PINK     0xF993
-#define COL_TEXT_GRAY     0x9CD3
+// Кольори з урахуванням BGR-порядку матриці ST7789 у GeekMagic SmallTV
+#define COL_BG_DARK       0x1861  // Темно-синій фон
+#define COL_HEADER_SAFE   0x9302  // Насичений синій (коли все спокійно)
+#define COL_HEADER_WARN   0x035A  // Помаранчевий (тривога в області / БПЛА поруч)
+#define COL_HEADER_ALERT  0x409C  // Яскраво-червоний (ТРИВОГА в районі)
+#define COL_CARD_BG       0x28E2  // Фон карток
+#define COL_OUTAGE_BG     0x38E3  // Фон нижньої панелі світла
+#define COL_TEXT_WHITE    0xFFFF  // Білий
+#define COL_TEXT_CYAN     0xFFEC  // Блакитний
+#define COL_TEXT_YELLOW   0x07FF  // Жовтий
+#define COL_TEXT_GREEN    0x47E9  // Зелений
+#define COL_TEXT_PINK     0x819F  // Червоно-рожевий (увага / відключення)
+#define COL_TEXT_GRAY     0x9CD3  // Світло-сірий
 
 // ============================================================================
 // 2. СТРУКТУРИ ЗБЕРЕЖЕННЯ НАЛАШТУВАНЬ (EEPROM) ТА СТАНУ ДАНИХ
@@ -87,7 +87,7 @@ struct AlertAndPowerData {
   bool alertOblast = false;
   String alertLevel = "none";
   String threatType = "Немає загроз";
-  String threatDirection = "В районі спокійно";
+  String threatDirection = "Хмельниччина: тривог немає";
   int nearestShahedKm = -1;
   String nearestShahedPlace = "";
   unsigned long alertStartedEpoch = 0;
@@ -255,17 +255,22 @@ String analyzeOutageWindow(const String& scheduleStr, int curHour, int curMin, b
 void fetchWeatherFromOpenMeteo() {
   if (WiFi.status() != WL_CONNECTED) return;
 
-  WiFiClient client;
-  HTTPClient http;
+  std::unique_ptr<BearSSL::WiFiClientSecure> client(new BearSSL::WiFiClientSecure);
+  client->setInsecure();
+  client->setBufferSizes(2048, 512);
 
-  String url = "http://api.open-meteo.com/v1/forecast?latitude=" + String(KAMIANETS_LAT, 4) +
+  HTTPClient http;
+  http.useHTTP10(true);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(7000);
+
+  String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(KAMIANETS_LAT, 4) +
                "&longitude=" + String(KAMIANETS_LON, 4) +
                "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m" +
                "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
                "&timezone=Europe%2FKyiv&forecast_days=2";
 
-  http.setTimeout(5000);
-  if (http.begin(client, url)) {
+  if (http.begin(*client, url)) {
     int httpCode = http.GET();
     if (httpCode == HTTP_CODE_OK) {
       JsonDocument doc;
@@ -301,6 +306,8 @@ void fetchAlertAndPowerStatus() {
     secClient->setBufferSizes(2048, 512);
 
     HTTPClient http;
+    http.useHTTP10(true);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.setTimeout(6000);
     String url = String(cfg.worker_url);
 
@@ -322,7 +329,7 @@ void fetchAlertAndPowerStatus() {
           statusData.alertOblast        = doc["alert_oblast"] | false;
           statusData.alertLevel         = doc["alert_level"] | "none";
           statusData.threatType         = doc["threat_type"] | "Немає загроз";
-          statusData.threatDirection    = doc["threat_dir"] | "В районі спокійно";
+          statusData.threatDirection    = doc["threat_dir"] | "Хмельниччина: тривог немає";
           statusData.nearestShahedKm    = doc["shahed_km"] | -1;
           statusData.nearestShahedPlace = doc["shahed_place"] | "";
           statusData.alertStartedEpoch  = doc["started_at"] | 0UL;
@@ -354,6 +361,7 @@ void fetchAlertAndPowerStatus() {
     secClient->setBufferSizes(1024, 512);
 
     HTTPClient http;
+    http.useHTTP10(true);
     String url = "https://api.alerts.in.ua/v2/iot/active_air_raid_alerts/" +
                  String(UID_KAMIANETS_RAION) + ".json?token=" + String(cfg.alerts_token);
     http.setTimeout(5000);
@@ -382,7 +390,7 @@ void fetchAlertAndPowerStatus() {
         } else {
           statusData.alertLevel      = "none";
           statusData.threatType      = "Немає загроз";
-          statusData.threatDirection = "Кам'янець-Под. р-н: тихо";
+          statusData.threatDirection = "Хмельниччина: тривог немає";
           statusData.alertStartedEpoch = 0;
         }
         statusData.lastUpdate = millis();
@@ -394,10 +402,15 @@ void fetchAlertAndPowerStatus() {
   }
 
   // Варіант В: Відкритий API Повітряних тривог Ubilling (без ключів)
-  WiFiClient plainClient;
+  std::unique_ptr<BearSSL::WiFiClientSecure> secClient(new BearSSL::WiFiClientSecure);
+  secClient->setInsecure();
+  secClient->setBufferSizes(2048, 512);
+
   HTTPClient http;
-  http.setTimeout(5000);
-  if (http.begin(plainClient, "http://airraid.net.ua/api/?states=1")) {
+  http.useHTTP10(true);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(6000);
+  if (http.begin(*secClient, "https://airraid.net.ua/api/?states=1")) {
     int code = http.GET();
     if (code == HTTP_CODE_OK) {
       String payload = http.getString();
@@ -420,7 +433,7 @@ void fetchAlertAndPowerStatus() {
       } else {
         statusData.alertLevel      = "none";
         statusData.threatType      = "Немає загроз";
-        statusData.threatDirection = "Хмельниччина: спокійно";
+        statusData.threatDirection = "Хмельниччина: тривог немає";
         statusData.alertStartedEpoch = 0;
       }
       statusData.lastUpdate = millis();
@@ -496,6 +509,7 @@ void drawScreen() {
   // --- 2. СЕРЕДНІЙ БЛОК ---
   tft.fillRect(0, 68, 240, 116, COL_BG_DARK);
 
+  // Картка тривог (без згадки черги світла)
   tft.fillRoundRect(4, 72, 232, 46, 5, COL_CARD_BG);
   u8f.setFont(u8g2_font_8x13_t_cyrillic);
 
@@ -516,6 +530,15 @@ void drawScreen() {
     u8f.setForegroundColor(COL_TEXT_WHITE);
     u8f.setCursor(10, 108);
     u8f.print(utf8Truncate(statusData.threatDirection, 35));
+  } else if (statusData.alertOblast) {
+    u8f.setForegroundColor(COL_TEXT_YELLOW);
+    u8f.setCursor(10, 88);
+    u8f.print("Область: тривога поруч");
+
+    u8f.setFont(u8g2_font_6x13_t_cyrillic);
+    u8f.setForegroundColor(COL_TEXT_WHITE);
+    u8f.setCursor(10, 108);
+    u8f.print(utf8Truncate(statusData.threatDirection, 35));
   } else {
     u8f.setForegroundColor(COL_TEXT_GREEN);
     u8f.setCursor(10, 88);
@@ -524,9 +547,10 @@ void drawScreen() {
     u8f.setFont(u8g2_font_6x13_t_cyrillic);
     u8f.setForegroundColor(COL_TEXT_GRAY);
     u8f.setCursor(10, 108);
-    u8f.print("Розвадовського, 5 • Черга 5.2");
+    u8f.print(utf8Truncate(statusData.threatDirection, 35));
   }
 
+  // Картка погоди
   tft.fillRoundRect(4, 122, 232, 58, 5, COL_CARD_BG);
   if (weather.valid) {
     u8f.setFont(u8g2_font_8x13_t_cyrillic);
