@@ -124,7 +124,7 @@ String utf8Truncate(const String& str, size_t maxChars) {
   return str.substring(0, byteIndex);
 }
 
-void printWrappedUtf8(const String& text, int x, int y, int lineHeight, size_t maxCharsPerLine, int maxLines) {
+int printWrappedUtf8(const String& text, int x, int y, int lineHeight, size_t maxCharsPerLine, int maxLines) {
   size_t startByte = 0;
   size_t len = text.length();
   int line = 0;
@@ -169,6 +169,7 @@ void printWrappedUtf8(const String& text, int x, int y, int lineHeight, size_t m
     startByte = nextStart;
     line++;
   }
+  return line > 0 ? line : 1;
 }
 
 void applyBacklight(uint8_t percent) {
@@ -486,7 +487,7 @@ void fetchAlertAndPowerStatus() {
 }
 
 // ============================================================================
-// 6. ВІДМАЛЬОВУВАННЯ ЕКРАНА 240x240 (БЕЗ ШАПКИ, КВАДРАТНИЙ ГОДИННИК У ПОГОДІ)
+// 6. ВІДМАЛЬОВУВАННЯ ЕКРАНА 240x240
 // ============================================================================
 void drawScreen() {
   time_t now = time(nullptr);
@@ -496,7 +497,54 @@ void drawScreen() {
   tft.fillScreen(COL_BG_DARK);
   u8f.setFontMode(1);
 
-  // --- 1. ВЕРХНІЙ БЛОК: ТРИВОГИ ТА БПЛА (y = 4..76, висота 72px) ---
+  // --- 1. ВЕРХНІЙ БЛОК: ПОГОДА + КВАДРАТНИЙ ГОДИННИК СПРАВА (y = 3..75, висота 72px) ---
+  tft.fillRoundRect(4, 3, 232, 72, 6, COL_CARD_BG);
+
+  uint16_t clockBoxBg = COL_HEADER_SAFE;
+  if (statusData.alertRaion) clockBoxBg = COL_HEADER_ALERT;
+  else if (statusData.alertOblast || statusData.nearestShahedKm > 0) clockBoxBg = COL_HEADER_WARN;
+
+  tft.fillRoundRect(184, 7, 47, 64, 6, clockBoxBg);
+  char hhBuf[4];
+  char mmBuf[4];
+  snprintf(hhBuf, sizeof(hhBuf), "%02d", timeinfo.tm_hour);
+  snprintf(mmBuf, sizeof(mmBuf), "%02d", timeinfo.tm_min);
+
+  u8f.setFont(u8g2_font_inr24_mn);
+  u8f.setForegroundColor(COL_TEXT_WHITE);
+  u8f.setCursor(192, 35);
+  u8f.print(hhBuf);
+  u8f.setCursor(192, 65);
+  u8f.print(mmBuf);
+
+  u8f.setFont(u8g2_font_8x13_t_cyrillic);
+  if (weather.valid) {
+    u8f.setForegroundColor(COL_TEXT_YELLOW);
+    u8f.setCursor(10, 21);
+    char wNowBuf[40];
+    snprintf(wNowBuf, sizeof(wNowBuf), "Зараз:%+.0f°(відч%+.0f°)", weather.tempNow, weather.feelsLike);
+    u8f.print(utf8Truncate(String(wNowBuf), 21));
+
+    u8f.setForegroundColor(COL_TEXT_CYAN);
+    u8f.setCursor(10, 43);
+    String condNow = weatherCodeToText(weather.codeNow) + " " + String(weather.humidity) +
+                     "% " + String(weather.windSpeed, 0) + "м/с";
+    u8f.print(utf8Truncate(condNow, 21));
+
+    u8f.setForegroundColor(COL_TEXT_WHITE);
+    u8f.setCursor(10, 65);
+    char wTomBuf[48];
+    snprintf(wTomBuf, sizeof(wTomBuf), "Завтра:%+.0f..%+.0f°(%d%%)",
+             weather.tempTomorrowMin, weather.tempTomorrowMax,
+             weather.precipProbTomorrow);
+    u8f.print(utf8Truncate(String(wTomBuf), 21));
+  } else {
+    u8f.setForegroundColor(COL_TEXT_GRAY);
+    u8f.setCursor(10, 43);
+    u8f.print("Оновлення погоди...");
+  }
+
+  // --- 2. СЕРЕДНІЙ БЛОК: ТРИВОГИ ТА БПЛА (y = 79..133, висота 54px) ---
   uint16_t alertCardBg = COL_CARD_BG;
   if (statusData.alertRaion) {
     alertCardBg = COL_HEADER_ALERT;
@@ -504,7 +552,7 @@ void drawScreen() {
     alertCardBg = COL_HEADER_WARN;
   }
 
-  tft.fillRoundRect(4, 4, 232, 72, 6, alertCardBg);
+  tft.fillRoundRect(4, 79, 232, 54, 6, alertCardBg);
   u8f.setFont(u8g2_font_8x13_t_cyrillic);
 
   if (statusData.alertRaion) {
@@ -514,103 +562,54 @@ void drawScreen() {
     }
     String alertTitle = "ТРИВОГА! (" + String(durMins) + " хв)";
     u8f.setForegroundColor(COL_TEXT_WHITE);
-    u8f.setCursor(10, 22);
+    u8f.setCursor(10, 96);
     u8f.print(utf8Truncate(alertTitle, 27));
 
-    printWrappedUtf8(statusData.threatDirection, 10, 42, 19, 27, 2);
+    printWrappedUtf8(statusData.threatDirection, 10, 113, 16, 27, 2);
   } else if (statusData.nearestShahedKm > 0) {
     String distLine = "БПЛА: ~" + String(statusData.nearestShahedKm) + " км";
     if (statusData.nearestShahedPlace.length() > 0) {
       distLine += " (" + statusData.nearestShahedPlace + ")";
     }
     u8f.setForegroundColor(COL_TEXT_WHITE);
-    u8f.setCursor(10, 22);
+    u8f.setCursor(10, 96);
     u8f.print(utf8Truncate(distLine, 27));
 
-    printWrappedUtf8(statusData.threatDirection, 10, 42, 19, 27, 2);
+    printWrappedUtf8(statusData.threatDirection, 10, 113, 16, 27, 2);
   } else if (statusData.alertOblast) {
     u8f.setForegroundColor(COL_TEXT_WHITE);
-    u8f.setCursor(10, 22);
+    u8f.setCursor(10, 96);
     u8f.print("Тривога в області");
 
-    printWrappedUtf8(statusData.threatDirection, 10, 42, 19, 27, 2);
+    printWrappedUtf8(statusData.threatDirection, 10, 113, 16, 27, 2);
   } else {
     u8f.setForegroundColor(COL_TEXT_GREEN);
-    u8f.setCursor(10, 22);
+    u8f.setCursor(10, 96);
     u8f.print("Район: без тривог і БПЛА");
 
     u8f.setForegroundColor(COL_TEXT_GRAY);
-    printWrappedUtf8(statusData.threatDirection, 10, 42, 19, 27, 2);
+    printWrappedUtf8(statusData.threatDirection, 10, 113, 16, 27, 2);
   }
 
-  // --- 2. СЕРЕДНІЙ БЛОК: ПОГОДА + КВАДРАТНИЙ ГОДИННИК СПРАВА (y = 80..154, висота 74px) ---
-  tft.fillRoundRect(4, 80, 232, 74, 6, COL_CARD_BG);
-
-  // Квадратний годинник справа (години зверху, хвилини знизу)
-  uint16_t clockBoxBg = COL_HEADER_SAFE;
-  if (statusData.alertRaion) clockBoxBg = COL_HEADER_ALERT;
-  else if (statusData.alertOblast || statusData.nearestShahedKm > 0) clockBoxBg = COL_HEADER_WARN;
-
-  tft.fillRoundRect(184, 85, 47, 64, 6, clockBoxBg);
-  char hhBuf[4];
-  char mmBuf[4];
-  snprintf(hhBuf, sizeof(hhBuf), "%02d", timeinfo.tm_hour);
-  snprintf(mmBuf, sizeof(mmBuf), "%02d", timeinfo.tm_min);
-
-  u8f.setFont(u8g2_font_inr24_mn);
-  u8f.setForegroundColor(COL_TEXT_WHITE);
-  u8f.setCursor(192, 113);
-  u8f.print(hhBuf);
-  u8f.setCursor(192, 143);
-  u8f.print(mmBuf);
-
-  // Погода зліва (шрифт 8x13, до 21 символу в рядок)
-  u8f.setFont(u8g2_font_8x13_t_cyrillic);
-  if (weather.valid) {
-    u8f.setForegroundColor(COL_TEXT_YELLOW);
-    u8f.setCursor(10, 99);
-    char wNowBuf[40];
-    snprintf(wNowBuf, sizeof(wNowBuf), "Зараз:%+.0f°(відч%+.0f°)", weather.tempNow, weather.feelsLike);
-    u8f.print(utf8Truncate(String(wNowBuf), 21));
-
-    u8f.setForegroundColor(COL_TEXT_CYAN);
-    u8f.setCursor(10, 121);
-    String condNow = weatherCodeToText(weather.codeNow) + " " + String(weather.humidity) +
-                     "% " + String(weather.windSpeed, 0) + "м/с";
-    u8f.print(utf8Truncate(condNow, 21));
-
-    u8f.setForegroundColor(COL_TEXT_WHITE);
-    u8f.setCursor(10, 143);
-    char wTomBuf[48];
-    snprintf(wTomBuf, sizeof(wTomBuf), "Завтра:%+.0f..%+.0f°(%d%%)",
-             weather.tempTomorrowMin, weather.tempTomorrowMax,
-             weather.precipProbTomorrow);
-    u8f.print(utf8Truncate(String(wTomBuf), 21));
-  } else {
-    u8f.setForegroundColor(COL_TEXT_GRAY);
-    u8f.setCursor(10, 121);
-    u8f.print("Оновлення погоди...");
-  }
-
-  // --- 3. НИЖНІЙ БЛОК: ГРАФІК СВІТЛА 5.2 (y = 158..236, висота 78px, весь шрифт 8x13) ---
-  tft.fillRoundRect(4, 158, 232, 78, 6, COL_OUTAGE_BG);
+  // --- 3. НИЖНІЙ БЛОК: ГРАФІК СВІТЛА 5.2 (y = 137..237, висота 100px) ---
+  tft.fillRoundRect(4, 137, 232, 100, 6, COL_OUTAGE_BG);
 
   bool inOutageSlot = false;
   String powerHeadline = analyzeOutageWindow(statusData.outageToday, timeinfo.tm_hour, timeinfo.tm_min, inOutageSlot);
 
   u8f.setFont(u8g2_font_8x13_t_cyrillic);
   u8f.setForegroundColor(inOutageSlot ? COL_TEXT_PINK : COL_TEXT_GREEN);
-  u8f.setCursor(10, 175);
+  u8f.setCursor(10, 154);
   u8f.print(utf8Truncate(powerHeadline, 27));
 
   u8f.setForegroundColor(COL_TEXT_WHITE);
   String lineToday = "Сьогодні: " + statusData.outageToday;
-  printWrappedUtf8(lineToday, 10, 194, 18, 27, 2);
+  int linesToday = printWrappedUtf8(lineToday, 10, 173, 17, 27, 2);
 
+  int yTom = 173 + linesToday * 17 + 2;
   u8f.setForegroundColor(COL_TEXT_GRAY);
   String lineTom = "Завтра: " + statusData.outageTomorrow;
-  u8f.setCursor(10, 230);
-  u8f.print(utf8Truncate(lineTom, 27));
+  printWrappedUtf8(lineTom, 10, yTom, 17, 27, 2);
 }
 
 // ============================================================================
